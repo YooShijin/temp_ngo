@@ -1,12 +1,12 @@
 """
 Enhanced Database Initialization Script
-Creates tables and seeds rich sample data
+Seeds realistic NGO ecosystem data: NGOs, Users, Categories, Office Bearers, Events, Applications, Blacklist info
 """
 
 from app import create_app
-from models import db, Category, User, NGO, VolunteerPost, Event, Application
+from models import db, Category, User, NGO, VolunteerPost, Event, Application, OfficeBearer, BlacklistRecord
 from config import Config
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import random
 
 def init_database():
@@ -20,7 +20,7 @@ def init_database():
         db.create_all()
 
         # -----------------------------
-        # 1. Seed Categories
+        # 1️⃣ Categories
         # -----------------------------
         print("Seeding categories...")
         categories_data = [
@@ -35,40 +35,31 @@ def init_database():
             {'name': 'Social Welfare', 'slug': 'social-welfare', 'icon': '🤝', 'description': 'General social welfare programs'},
             {'name': 'Poverty Alleviation', 'slug': 'poverty-alleviation', 'icon': '💰', 'description': 'Programs to reduce poverty'}
         ]
-        categories = []
-        for cat_data in categories_data:
-            cat = Category(**cat_data)
-            db.session.add(cat)
-            categories.append(cat)
+        categories = [Category(**c) for c in categories_data]
+        db.session.add_all(categories)
         db.session.commit()
 
         # -----------------------------
-        # 2. Seed Users
+        # 2️⃣ Users (5 normal + 1 admin)
         # -----------------------------
-        print("Creating users...")
+        print("Seeding users...")
         users = []
         for i in range(5):
             user = User(
                 email=f"user{i+1}@example.com",
                 name=f"User {i+1}",
-                role='user'
+                role="user"
             )
             user.set_password("password123")
-            db.session.add(user)
             users.append(user)
-
-        admin = User(
-            email=Config.ADMIN_EMAIL,
-            name='Admin',
-            role='admin'
-        )
+        admin = User(email=Config.ADMIN_EMAIL, name="Admin", role="admin")
         admin.set_password(Config.ADMIN_PASSWORD)
-        db.session.add(admin)
         users.append(admin)
+        db.session.add_all(users)
         db.session.commit()
 
         # -----------------------------
-        # 3. Seed NGOs
+        # 3️⃣ NGOs
         # -----------------------------
         print("Creating NGOs...")
         ngo_names = [
@@ -85,22 +76,31 @@ def init_database():
         ]
         cities = ["Delhi", "Mumbai", "Bangalore", "Kolkata", "Pune", "Chennai", "Hyderabad", "Jaipur", "Lucknow", "Patna"]
         states = ["Delhi", "Maharashtra", "Karnataka", "West Bengal", "Maharashtra", "Tamil Nadu", "Telangana", "Rajasthan", "Uttar Pradesh", "Bihar"]
+        districts = ["New Delhi", "Mumbai Suburban", "Bengaluru Urban", "Kolkata", "Pune", "Chennai", "Hyderabad", "Jaipur", "Lucknow", "Patna"]
 
         ngos = []
         for i, name in enumerate(ngo_names):
             ngo = NGO(
                 name=name,
                 registration_no=f"REG-{1000+i}",
+                darpan_id=f"BR/{i+1:05d}/2025",
                 mission=f"Empowering communities through {categories[i % len(categories)].name.lower()} programs.",
-                description=f"{name} works on social impact and welfare in India focusing on {categories[i % len(categories)].name.lower()}.",
+                description=f"{name} focuses on creating measurable social impact across India.",
+                founded_year=1995 + random.randint(0, 20),
                 website=f"https://www.{name.split()[0].lower()}.org",
-                email=f"contact@{name.split()[0].lower()}.org",
+                email=f"info@{name.split()[0].lower()}.org",
                 phone=f"+91-98{i}45678{i}",
-                address=f"{i+10} Charity Street",
+                address=f"{i+10} Charity Lane, {cities[i]}",
                 city=cities[i],
                 state=states[i],
-                transparency_score=random.randint(60, 100),
+                district=districts[i],
+                registered_with=random.choice(["Registrar of Societies", "Registrar of Companies", "Charitable Trusts"]),
+                registration_date=date(2000 + random.randint(0, 20), random.randint(1, 12), random.randint(1, 28)),
+                act_name=random.choice(["Societies Registration Act, 1860", "Indian Trusts Act, 1882", "Companies Act, 2013"]),
+                type_of_ngo=random.choice(["Society", "Trust", "Section 8 Company"]),
+                transparency_score=random.randint(50, 100),
                 verified=random.choice([True, False]),
+                active=True,
                 scraped_at=datetime.utcnow(),
                 source="Seed Script"
             )
@@ -110,77 +110,109 @@ def init_database():
         db.session.commit()
 
         # -----------------------------
-        # 4. Seed Volunteer Posts
+        # 4️⃣ Office Bearers (2–4 per NGO)
+        # -----------------------------
+        print("Adding office bearers...")
+        designations = ["President", "Secretary", "Treasurer", "Member"]
+        for ngo in ngos:
+            for _ in range(random.randint(2, 4)):
+                bearer = OfficeBearer(
+                    ngo_id=ngo.id,
+                    name=f"{random.choice(['Amit', 'Priya', 'Ravi', 'Sneha', 'Karan', 'Deepa', 'Manish', 'Neha'])} {random.choice(['Sharma', 'Kumar', 'Patel', 'Rao', 'Verma', 'Singh'])}",
+                    designation=random.choice(designations)
+                )
+                db.session.add(bearer)
+        db.session.commit()
+
+        # -----------------------------
+        # 5️⃣ Blacklist Records (for 2 NGOs)
+        # -----------------------------
+        print("Seeding blacklist info...")
+        blacklisted_ngos = random.sample(ngos, k=2)
+        for ngo in blacklisted_ngos:
+            record = BlacklistRecord(
+                ngo_id=ngo.id,
+                blacklisted_by=random.choice(["Ministry of Home Affairs", "NITI Aayog"]),
+                blacklist_date=date(2023, random.randint(1, 12), random.randint(1, 28)),
+                reason=random.choice(["Violation of FCRA guidelines", "Non-submission of annual reports"]),
+                wef_date=date(2023, random.randint(1, 12), random.randint(1, 28)),
+                last_updated=date(2024, random.randint(1, 12), random.randint(1, 28))
+            )
+            ngo.blacklisted = True
+            db.session.add(record)
+        db.session.commit()
+
+        # -----------------------------
+        # 6️⃣ Volunteer Posts
         # -----------------------------
         print("Creating volunteer posts...")
-        volunteer_posts = []
+        posts = []
         for ngo in ngos:
             for j in range(random.randint(1, 3)):
                 post = VolunteerPost(
                     ngo_id=ngo.id,
-                    title=f"Volunteer for {ngo.name} - Position {j+1}",
-                    description="Assist with ongoing NGO initiatives and outreach programs.",
-                    requirements="Basic communication skills and enthusiasm to help.",
+                    title=f"Volunteer for {ngo.name} - Role {j+1}",
+                    description="Assist with community outreach and educational initiatives.",
+                    requirements="Commitment to social work and at least 5 hours per week.",
                     location=f"{ngo.city}, {ngo.state}",
-                    deadline=datetime.utcnow() + timedelta(days=random.randint(10, 60)),
+                    deadline=datetime.utcnow() + timedelta(days=random.randint(15, 60)),
                     active=True
                 )
                 db.session.add(post)
-                volunteer_posts.append(post)
+                posts.append(post)
         db.session.commit()
 
         # -----------------------------
-        # 5. Seed Events
+        # 7️⃣ Events
         # -----------------------------
         print("Creating events...")
-        events = []
         for ngo in ngos:
             for j in range(random.randint(1, 2)):
                 event = Event(
                     ngo_id=ngo.id,
-                    title=f"{ngo.name} Charity Event {j+1}",
-                    description=f"Join us for an impactful event organized by {ngo.name}.",
-                    event_date=datetime.utcnow() + timedelta(days=random.randint(5, 45)),
+                    title=f"{ngo.name} Awareness Drive {j+1}",
+                    description=f"Join {ngo.name} for a local awareness drive on {random.choice(['education', 'health', 'sanitation'])}.",
+                    event_date=datetime.utcnow() + timedelta(days=random.randint(5, 30)),
                     location=f"{ngo.city}, {ngo.state}",
-                    registration_link=f"https://{ngo.name.split()[0].lower()}.org/events"
+                    registration_link=f"{ngo.website}/register"
                 )
                 db.session.add(event)
-                events.append(event)
         db.session.commit()
 
         # -----------------------------
-        # 6. Seed Applications
+        # 8️⃣ Applications
         # -----------------------------
-        print("Creating volunteer applications...")
-        for i in range(10):
-            app = Application(
+        print("Creating applications...")
+        for _ in range(10):
+            application = Application(
                 user_id=random.choice(users).id,
-                volunteer_post_id=random.choice(volunteer_posts).id,
-                message="I am passionate about social work and would love to contribute.",
+                volunteer_post_id=random.choice(posts).id,
+                message="I would love to contribute to your initiative.",
                 status=random.choice(["pending", "accepted", "rejected"])
             )
-            db.session.add(app)
+            db.session.add(application)
         db.session.commit()
 
         # -----------------------------
-        # Final summary
+        # ✅ Summary
         # -----------------------------
-        print("\n" + "=" * 60)
-        print("🎉 Database seeded successfully with sample data!")
-        print("=" * 60)
-        print(f"Categories: {len(categories)}")
-        print(f"NGOs: {len(ngos)}")
-        print(f"Volunteer Posts: {len(volunteer_posts)}")
-        print(f"Events: {len(events)}")
-        print(f"Users: {len(users)}")
+        print("\n" + "=" * 70)
+        print("🎉 Database seeded successfully with realistic sample data!")
+        print("=" * 70)
+        print(f"Categories:       {len(categories)}")
+        print(f"NGOs:             {len(ngos)}")
+        print(f"Office Bearers:   {OfficeBearer.query.count()}")
+        print(f"Blacklisted NGOs: {len(blacklisted_ngos)}")
+        print(f"Volunteer Posts:  {len(posts)}")
+        print(f"Users:            {len(users)}")
         print("Admin credentials:")
-        print(f"   Email: {Config.ADMIN_EMAIL}")
-        print(f"   Password: {Config.ADMIN_PASSWORD}")
-        print("=" * 60)
-        print("Next Steps:")
-        print("1️⃣ Run the app: python app.py")
-        print("2️⃣ Visit /api/ngos or /api/volunteer-posts to verify data.")
-        print("=" * 60)
+        print(f"  Email: {Config.ADMIN_EMAIL}")
+        print(f"  Password: {Config.ADMIN_PASSWORD}")
+        print("=" * 70)
+        print("✅ Next:")
+        print(" → Run the app: python app.py")
+        print(" → Check /api/ngos or /api/blacklisted to verify data.")
+        print("=" * 70)
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     init_database()

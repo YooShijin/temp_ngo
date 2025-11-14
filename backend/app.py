@@ -1,9 +1,9 @@
 """
-Main Flask Application
+Enhanced Flask Application with Blacklist Support
 """
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from models import db, NGO, Category, User, VolunteerPost, Event, Application
+from models import db, NGO, Category, User, VolunteerPost, Event, Application, BlacklistRecord
 from config import Config
 from ai_service import ai_service
 import jwt
@@ -14,7 +14,6 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     
-    # Initialize extensions
     db.init_app(app)
     CORS(app)
     
@@ -22,7 +21,7 @@ def create_app():
 
 app = create_app()
 
-# Authentication decorator
+# Authentication decorators
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -45,7 +44,6 @@ def token_required(f):
     
     return decorated
 
-# Admin only decorator
 def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -118,10 +116,16 @@ def get_ngos():
     category = request.args.get('category')
     state = request.args.get('state')
     city = request.args.get('city')
+    district = request.args.get('district')
     verified = request.args.get('verified')
     search = request.args.get('search')
+    exclude_blacklisted = request.args.get('exclude_blacklisted', 'true') == 'true'
     
     query = NGO.query.filter_by(active=True)
+    
+    # Exclude blacklisted by default
+    if exclude_blacklisted:
+        query = query.filter_by(blacklisted=False)
     
     if category:
         query = query.join(NGO.categories).filter(Category.slug == category)
@@ -132,6 +136,9 @@ def get_ngos():
     if city:
         query = query.filter(NGO.city.ilike(f'%{city}%'))
     
+    if district:
+        query = query.filter(NGO.district.ilike(f'%{district}%'))
+    
     if verified == 'true':
         query = query.filter(NGO.verified == True)
     
@@ -140,7 +147,8 @@ def get_ngos():
             db.or_(
                 NGO.name.ilike(f'%{search}%'),
                 NGO.mission.ilike(f'%{search}%'),
-                NGO.description.ilike(f'%{search}%')
+                NGO.description.ilike(f'%{search}%'),
+                NGO.darpan_id.ilike(f'%{search}%')
             )
         )
     
@@ -165,6 +173,7 @@ def create_ngo(current_user):
     
     ngo = NGO(
         name=data['name'],
+        darpan_id=data.get('darpan_id'),
         mission=data.get('mission'),
         description=data.get('description'),
         email=data.get('email'),
@@ -173,6 +182,7 @@ def create_ngo(current_user):
         address=data.get('address'),
         city=data.get('city'),
         state=data.get('state'),
+        district=data.get('district'),
         registration_no=data.get('registration_no'),
         verified=False
     )
@@ -218,6 +228,81 @@ def verify_ngo(current_user, id):
     db.session.commit()
     return jsonify({'message': 'NGO verified successfully'})
 
+# ============= BLACKLIST ROUTES =============
+
+@app.route('/api/blacklisted', methods=['GET'])
+def get_blacklisted_ngos():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', Config.ITEMS_PER_PAGE, type=int)
+    
+    # Filters
+    state = request.args.get('state')
+    blacklisted_by = request.args.get('blacklisted_by')
+    search = request.args.get('search')
+    
+    query = NGO.query.filter_by(blacklisted=True)
+    
+    if state:
+        query = query.filter(NGO.state.ilike(f'%{state}%'))
+    
+    if blacklisted_by:
+        query = query.join(NGO.blacklist_info).filter(
+            BlacklistRecord.blacklisted_by.ilike(f'%{blacklisted_by}%')
+        )
+    
+    if search:
+        query = query.filter(
+            db.or_(
+                NGO.name.ilike(f'%{search}%'),
+                NGO.darpan_id.ilike(f'%{search}%')
+            )
+        )
+    
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    return jsonify({
+        'ngos': [ngo.to_dict() for ngo in pagination.items],
+        'total': pagination.total,
+        'pages': pagination.pages,
+        'current_page': page
+    })
+
+@app.route('/api/ngos/<int:id>/blacklist', methods=['POST'])
+@admin_required
+def blacklist_ngo(current_user, id):
+    ngo = NGO.query.get_or_404(id)
+    data = request.get_json()
+    
+    ngo.blacklisted = True
+    
+    # Create blacklist record
+    blacklist_record = BlacklistRecord(
+        ngo_id=ngo.id,
+        blacklisted_by=data.get('blacklisted_by'),
+        blacklist_date=datetime.now(),
+        wef_date=datetime.now(),
+        last_updated=datetime.now(),
+        reason=data.get('reason')
+    )
+    
+    db.session.add(blacklist_record)
+    db.session.commit()
+    
+    return jsonify({'message': 'NGO blacklisted successfully'})
+
+@app.route('/api/ngos/<int:id>/unblacklist', methods=['POST'])
+@admin_required
+def unblacklist_ngo(current_user, id):
+    ngo = NGO.query.get_or_404(id)
+    ngo.blacklisted = False
+    
+    # Remove blacklist record
+    if ngo.blacklist_info:
+        db.session.delete(ngo.blacklist_info)
+    
+    db.session.commit()
+    return jsonify({'message': 'NGO removed from blacklist'})
+
 # ============= CATEGORY ROUTES =============
 
 @app.route('/api/categories', methods=['GET'])
@@ -231,9 +316,9 @@ def get_categories():
 def get_volunteer_posts():
     active_only = request.args.get('active', 'true') == 'true'
     
-    query = VolunteerPost.query
+    query = VolunteerPost.query.join(NGO).filter(NGO.blacklisted == False)
     if active_only:
-        query = query.filter_by(active=True)
+        query = query.filter(VolunteerPost.active == True)
     
     posts = query.order_by(VolunteerPost.created_at.desc()).all()
     return jsonify([post.to_dict() for post in posts])
@@ -263,7 +348,7 @@ def create_volunteer_post(current_user):
 def get_events():
     upcoming = request.args.get('upcoming', 'true') == 'true'
     
-    query = Event.query
+    query = Event.query.join(NGO).filter(NGO.blacklisted == False)
     if upcoming:
         query = query.filter(Event.event_date >= datetime.utcnow())
     
@@ -289,33 +374,79 @@ def create_event(current_user):
     
     return jsonify(event.to_dict()), 201
 
+# ============= MAP DATA ROUTE =============
+
+@app.route('/api/ngos/map', methods=['GET'])
+def get_ngos_map_data():
+    """Get NGOs with coordinates for map display"""
+    exclude_blacklisted = request.args.get('exclude_blacklisted', 'true') == 'true'
+    
+    query = NGO.query.filter(
+        NGO.active == True,
+        NGO.latitude.isnot(None),
+        NGO.longitude.isnot(None)
+    )
+    
+    if exclude_blacklisted:
+        query = query.filter(NGO.blacklisted == False)
+    
+    ngos = query.all()
+    
+    map_data = []
+    for ngo in ngos:
+        map_data.append({
+            'id': ngo.id,
+            'name': ngo.name,
+            'lat': ngo.latitude,
+            'lng': ngo.longitude,
+            'city': ngo.city,
+            'state': ngo.state,
+            'verified': ngo.verified,
+            'blacklisted': ngo.blacklisted,
+            'categories': [cat.name for cat in ngo.categories]
+        })
+    
+    return jsonify(map_data)
+
 # ============= STATS ROUTES =============
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    total_ngos = NGO.query.filter_by(active=True).count()
-    verified_ngos = NGO.query.filter_by(active=True, verified=True).count()
-    total_volunteers = VolunteerPost.query.filter_by(active=True).count()
-    upcoming_events = Event.query.filter(Event.event_date >= datetime.utcnow()).count()
+    total_ngos = NGO.query.filter_by(active=True, blacklisted=False).count()
+    verified_ngos = NGO.query.filter_by(active=True, verified=True, blacklisted=False).count()
+    blacklisted_ngos = NGO.query.filter_by(blacklisted=True).count()
+    total_volunteers = VolunteerPost.query.join(NGO).filter(
+        VolunteerPost.active == True,
+        NGO.blacklisted == False
+    ).count()
+    upcoming_events = Event.query.join(NGO).filter(
+        Event.event_date >= datetime.utcnow(),
+        NGO.blacklisted == False
+    ).count()
     
-    # NGOs by category
+    # NGOs by category (excluding blacklisted)
     categories_data = []
     for category in Category.query.all():
-        count = len([ngo for ngo in category.ngos if ngo.active])
+        count = len([ngo for ngo in category.ngos if ngo.active and not ngo.blacklisted])
         if count > 0:
             categories_data.append({
                 'name': category.name,
                 'count': count
             })
     
-    # NGOs by state
+    # NGOs by state (excluding blacklisted)
     states_data = db.session.query(
         NGO.state, db.func.count(NGO.id)
-    ).filter(NGO.active == True, NGO.state.isnot(None)).group_by(NGO.state).all()
+    ).filter(
+        NGO.active == True,
+        NGO.blacklisted == False,
+        NGO.state.isnot(None)
+    ).group_by(NGO.state).all()
     
     return jsonify({
         'total_ngos': total_ngos,
         'verified_ngos': verified_ngos,
+        'blacklisted_ngos': blacklisted_ngos,
         'total_volunteers': total_volunteers,
         'upcoming_events': upcoming_events,
         'categories': categories_data,
@@ -335,9 +466,11 @@ def search():
         db.or_(
             NGO.name.ilike(f'%{query_text}%'),
             NGO.mission.ilike(f'%{query_text}%'),
-            NGO.description.ilike(f'%{query_text}%')
+            NGO.description.ilike(f'%{query_text}%'),
+            NGO.darpan_id.ilike(f'%{query_text}%')
         ),
-        NGO.active == True
+        NGO.active == True,
+        NGO.blacklisted == False
     ).limit(10).all()
     
     return jsonify({

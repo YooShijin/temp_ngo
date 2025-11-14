@@ -16,9 +16,12 @@ class NGO(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(255), nullable=False)
     registration_no = db.Column(db.String(100), unique=True)
+    darpan_id = db.Column(db.String(100), unique=True)  # Added DARPAN ID
     mission = db.Column(db.Text)
     description = db.Column(db.Text)
     founded_year = db.Column(db.Integer)
+    
+    # Contact
     email = db.Column(db.String(255))
     phone = db.Column(db.String(50))
     website = db.Column(db.String(255))
@@ -27,17 +30,25 @@ class NGO(db.Model):
     address = db.Column(db.Text)
     city = db.Column(db.String(100))
     state = db.Column(db.String(100))
+    district = db.Column(db.String(100))  # Added district
     country = db.Column(db.String(100), default='India')
     latitude = db.Column(db.Float)
     longitude = db.Column(db.Float)
     
+    # Registration Details
+    registered_with = db.Column(db.String(255))  # e.g., "Registrar of Companies"
+    registration_date = db.Column(db.Date)
+    act_name = db.Column(db.String(255))  # e.g., "COMPANIES ACT, 2013"
+    type_of_ngo = db.Column(db.String(100))  # e.g., "Section 8 Company"
+    
     # Verification & Status
     verified = db.Column(db.Boolean, default=False)
     active = db.Column(db.Boolean, default=True)
+    blacklisted = db.Column(db.Boolean, default=False)  # Added blacklist flag
     transparency_score = db.Column(db.Integer, default=0)
     
     # Metadata
-    source = db.Column(db.String(100))  # scraped from which site
+    source = db.Column(db.String(100))
     scraped_at = db.Column(db.DateTime)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -46,12 +57,15 @@ class NGO(db.Model):
     categories = db.relationship('Category', secondary=ngo_categories, backref='ngos')
     volunteer_posts = db.relationship('VolunteerPost', backref='ngo', lazy=True)
     events = db.relationship('Event', backref='ngo', lazy=True)
+    office_bearers = db.relationship('OfficeBearer', backref='ngo', lazy=True, cascade='all, delete-orphan')
+    blacklist_info = db.relationship('BlacklistRecord', backref='ngo', uselist=False, cascade='all, delete-orphan')
     
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
             'registration_no': self.registration_no,
+            'darpan_id': self.darpan_id,
             'mission': self.mission,
             'description': self.description,
             'founded_year': self.founded_year,
@@ -61,13 +75,21 @@ class NGO(db.Model):
             'address': self.address,
             'city': self.city,
             'state': self.state,
+            'district': self.district,
             'country': self.country,
             'latitude': self.latitude,
             'longitude': self.longitude,
+            'registered_with': self.registered_with,
+            'registration_date': self.registration_date.isoformat() if self.registration_date else None,
+            'act_name': self.act_name,
+            'type_of_ngo': self.type_of_ngo,
             'verified': self.verified,
             'active': self.active,
+            'blacklisted': self.blacklisted,
             'transparency_score': self.transparency_score,
             'categories': [cat.to_dict() for cat in self.categories],
+            'office_bearers': [ob.to_dict() for ob in self.office_bearers],
+            'blacklist_info': self.blacklist_info.to_dict() if self.blacklist_info else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
@@ -90,6 +112,43 @@ class Category(db.Model):
             'description': self.description
         }
 
+class OfficeBearer(db.Model):
+    __tablename__ = 'office_bearers'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    ngo_id = db.Column(db.Integer, db.ForeignKey('ngos.id'), nullable=False)
+    name = db.Column(db.String(255), nullable=False)
+    designation = db.Column(db.String(100))
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'designation': self.designation
+        }
+
+class BlacklistRecord(db.Model):
+    __tablename__ = 'blacklist_records'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    ngo_id = db.Column(db.Integer, db.ForeignKey('ngos.id'), nullable=False, unique=True)
+    blacklisted_by = db.Column(db.String(255))  # Authority that blacklisted
+    blacklist_date = db.Column(db.Date)
+    reason = db.Column(db.Text)
+    wef_date = db.Column(db.Date)  # With Effect From date
+    last_updated = db.Column(db.Date)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'ngo_id': self.ngo_id,
+            'blacklisted_by': self.blacklisted_by,
+            'blacklist_date': self.blacklist_date.isoformat() if self.blacklist_date else None,
+            'reason': self.reason,
+            'wef_date': self.wef_date.isoformat() if self.wef_date else None,
+            'last_updated': self.last_updated.isoformat() if self.last_updated else None
+        }
+
 class User(db.Model):
     __tablename__ = 'users'
     
@@ -97,7 +156,7 @@ class User(db.Model):
     email = db.Column(db.String(255), unique=True, nullable=False)
     password_hash = db.Column(db.String(255), nullable=False)
     name = db.Column(db.String(255))
-    role = db.Column(db.String(50), default='user')  # user, admin
+    role = db.Column(db.String(50), default='user')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     def set_password(self, password):
@@ -174,7 +233,7 @@ class Application(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
     volunteer_post_id = db.Column(db.Integer, db.ForeignKey('volunteer_posts.id'), nullable=False)
     message = db.Column(db.Text)
-    status = db.Column(db.String(50), default='pending')  # pending, accepted, rejected
+    status = db.Column(db.String(50), default='pending')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     user = db.relationship('User', backref='applications')
